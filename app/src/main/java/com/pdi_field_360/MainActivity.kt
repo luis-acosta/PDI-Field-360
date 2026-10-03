@@ -4,63 +4,66 @@ import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
 import android.net.ConnectivityManager
-import android.net.LinkProperties
-import android.net.NetworkCapabilities
-import android.os.Build
 import android.os.Bundle
 
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
+
+import androidx.compose.material3.*
+
+import androidx.compose.runtime.*
+
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
+
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 
 import com.arashivision.sdk.camera.InstaCameraSDK
 import com.arashivision.sdk.camera.api.CameraDevice
+import com.arashivision.sdk.camera.api.preview.CameraStreamListener
+import com.arashivision.sdk.camera.api.preview.PreviewStreamParamsUpdate
 import com.arashivision.sdk.camera.core.model.ConnectType
 import com.arashivision.sdk.camera.core.model.FunctionMode
+
+import com.arashivision.sdk.common.exception.InstaException
+
+import com.arashivision.sdk.media.api.listener.PlayerViewListener
+import com.arashivision.sdk.media.api.params.PreviewParams
+import com.arashivision.sdk.media.player.preview.InstaCapturePlayerView
+
 import com.pdi_field_360.ui.theme.PDIField360Theme
 
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+
+import com.arashivision.sdk.media.InstaMediaSDK
+
 
 
 class MainActivity : ComponentActivity() {
 
-    // =========================================================================
-    // INSTA360
-    // =========================================================================
+    // ============================================================
+    // CÁMARA
+    // ============================================================
 
     private var cameraDevice: CameraDevice? = null
 
-    // =========================================================================
-    // ESTADOS DE LA INTERFAZ
-    // =========================================================================
+
+    // ============================================================
+    // ESTADOS
+    // ============================================================
 
     private var cameraConnected by mutableStateOf(false)
 
@@ -69,103 +72,113 @@ class MainActivity : ComponentActivity() {
     )
 
     private var captureStatus by mutableStateOf(
-        "Esperando conexión"
+        "Esperando conexión..."
     )
+
+
+    // ============================================================
+    // VIDEO
+    // ============================================================
 
     private var isRecording by mutableStateOf(false)
 
-    private var recordingSeconds by mutableStateOf(0)
+    private var recordingSeconds by mutableIntStateOf(0)
 
     private var recordingJob: Job? = null
 
 
-    // =========================================================================
+    // ============================================================
+    // LIVE VIEW
+    // ============================================================
+
+    private var previewPlayerView: InstaCapturePlayerView? = null
+
+    private var previewStarted by mutableStateOf(false)
+
+    private var previewFirstFrame by mutableStateOf(false)
+
+    private var previewWidth = 1280
+
+    private var previewHeight = 960
+
+    private var previewFps = 30
+
+
+    // ============================================================
     // PERMISOS
-    // =========================================================================
+    // ============================================================
 
     private val permissionLauncher =
         registerForActivityResult(
             ActivityResultContracts.RequestMultiplePermissions()
         ) {
-            initializeInsta360()
+            // Los permisos se verifican al iniciar.
         }
 
 
-    // =========================================================================
+    // ============================================================
     // ON CREATE
-    // =========================================================================
+    // ============================================================
 
     override fun onCreate(savedInstanceState: Bundle?) {
 
         super.onCreate(savedInstanceState)
 
-        requestPermissions()
+
+        // --------------------------------------------------------
+        // Inicializar SDK Insta360
+        // --------------------------------------------------------
+
+        InstaCameraSDK.init(application) {
+
+            cacheDir =
+                externalCacheDir?.absolutePath
+        }
+
+        // Media SDK
+        // Necesario para InstaCapturePlayerView y renderizado 360°
+        InstaMediaSDK.init(application)
+        // --------------------------------------------------------
+        // Solicitar permisos
+        // --------------------------------------------------------
+
+        requestRequiredPermissions()
+
+
+        // --------------------------------------------------------
+        // Interfaz
+        // --------------------------------------------------------
 
         setContent {
 
             PDIField360Theme {
 
-                PDIField360Screen(
+                Surface(
+                    modifier = Modifier.fillMaxSize()
+                ) {
 
-                    cameraConnected = cameraConnected,
-
-                    cameraStatus = cameraStatus,
-
-                    captureStatus = captureStatus,
-
-                    isRecording = isRecording,
-
-                    recordingSeconds = recordingSeconds,
-
-                    onConnect = {
-                        connectCamera()
-                    },
-
-                    onDisconnect = {
-                        disconnectCamera()
-                    },
-
-                    onPhoto = {
-                        capturePhoto()
-                    },
-
-                    onStartVideo = {
-                        startVideo()
-                    },
-
-                    onStopVideo = {
-                        stopVideo()
-                    }
-                )
+                    PDIField360Screen()
+                }
             }
         }
     }
 
 
-    // =========================================================================
-    // SOLICITUD DE PERMISOS
-    // =========================================================================
+    // ============================================================
+    // PERMISOS
+    // ============================================================
 
-    private fun requestPermissions() {
+    private fun requestRequiredPermissions() {
 
         val permissions = mutableListOf(
 
             Manifest.permission.ACCESS_FINE_LOCATION,
+
             Manifest.permission.ACCESS_COARSE_LOCATION
         )
 
 
-        // Android 13 o superior
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-
-            permissions.add(
-                Manifest.permission.NEARBY_WIFI_DEVICES
-            )
-        }
-
-
-        // Android 12 o superior
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        if (android.os.Build.VERSION.SDK_INT >= 31) {
 
             permissions.add(
                 Manifest.permission.BLUETOOTH_SCAN
@@ -177,7 +190,16 @@ class MainActivity : ComponentActivity() {
         }
 
 
+        if (android.os.Build.VERSION.SDK_INT >= 33) {
+
+            permissions.add(
+                Manifest.permission.NEARBY_WIFI_DEVICES
+            )
+        }
+
+
         val missingPermissions =
+
             permissions.filter {
 
                 ContextCompat.checkSelfPermission(
@@ -192,149 +214,95 @@ class MainActivity : ComponentActivity() {
             permissionLauncher.launch(
                 missingPermissions.toTypedArray()
             )
-
-        } else {
-
-            initializeInsta360()
         }
     }
 
 
-    // =========================================================================
-    // INICIALIZACIÓN DEL SDK INSTA360
-    // =========================================================================
-
-    private fun initializeInsta360() {
-
-        try {
-
-            InstaCameraSDK.init(application) {
-
-                cacheDir =
-                    externalCacheDir?.absolutePath
-            }
-
-            cameraStatus =
-                "SDK Insta360 inicializado"
-
-        } catch (e: Exception) {
-
-            cameraStatus =
-                "Error SDK: ${e.message}"
-        }
-    }
-
-
-    // =========================================================================
-    // OBTENER NETWORK ID DEL WIFI wlan0
-    //
-    // Este procedimiento está basado en el Demo oficial del SDK 2.1.5.
-    // =========================================================================
+    // ============================================================
+    // OBTENER NETWORK ID DEL WIFI
+    // ============================================================
 
     private fun getWifiNetworkId(): Long {
 
-        return try {
+        val connectivityManager =
 
-            val connectivityManager =
-                getSystemService(
-                    Context.CONNECTIVITY_SERVICE
-                ) as ConnectivityManager
-
-
-            connectivityManager
-                .allNetworks
-                .firstOrNull { network ->
-
-                    val capabilities =
-                        connectivityManager
-                            .getNetworkCapabilities(network)
-                            ?: return@firstOrNull false
+            getSystemService(
+                Context.CONNECTIVITY_SERVICE
+            ) as ConnectivityManager
 
 
-                    // Debe ser una conexión Wi-Fi
-                    if (
-                        !capabilities.hasTransport(
-                            NetworkCapabilities.TRANSPORT_WIFI
-                        )
-                    ) {
-
-                        return@firstOrNull false
-                    }
+        val networks =
+            connectivityManager.allNetworks
 
 
-                    val linkProperties: LinkProperties =
-                        connectivityManager
-                            .getLinkProperties(network)
-                            ?: return@firstOrNull false
+        for (network in networks) {
+
+            val linkProperties =
+
+                connectivityManager.getLinkProperties(
+                    network
+                )
 
 
-                    // Interfaz Wi-Fi principal del teléfono
-                    linkProperties.interfaceName == "wlan0"
-                }
-                ?.networkHandle
-                ?: -1L
+            if (
+                linkProperties?.interfaceName == "wlan0"
+            ) {
 
-        } catch (e: Exception) {
-
-            -1L
+                return network.networkHandle
+            }
         }
+
+
+        return 0L
     }
 
 
-    // =========================================================================
-    // CONECTAR CON INSTA360 X3
-    // =========================================================================
+    // ============================================================
+    // CONECTAR INSTA360 X3
+    // ============================================================
 
     private fun connectCamera() {
-
-        if (cameraConnected) {
-            return
-        }
-
-
-        cameraStatus =
-            "Conectando con Insta360 X3..."
-
 
         lifecycleScope.launch {
 
             try {
 
-                // Crear dispositivo Insta360 utilizando Wi-Fi
-                val camera =
-                    CameraDevice.get(
-                        ConnectType.WIFI
-                    )
+                cameraStatus =
+                    "Conectando con Insta360 X3..."
+
+                captureStatus =
+                    "Estableciendo comunicación..."
 
 
-                cameraDevice = camera
-
-
-                // Obtener identificador de la red Wi-Fi
                 val networkId =
                     getWifiNetworkId()
 
 
-                if (networkId == -1L) {
-
-                    cameraConnected = false
+                if (networkId == 0L) {
 
                     cameraStatus =
-                        "No se detectó Wi-Fi"
+                        "No se encontró conexión Wi-Fi"
 
                     captureStatus =
-                        "Conecta primero el teléfono al Wi-Fi de la X3"
+                        "Conecta el teléfono al Wi-Fi de la X3"
 
                     return@launch
                 }
 
 
-                // -------------------------------------------------------------
-                // CONEXIÓN REAL CON LA CÁMARA
-                // -------------------------------------------------------------
+                val camera =
 
-                camera
-                    .connect(networkId)
+                    CameraDevice.get(
+                        ConnectType.WIFI
+                    )
+
+
+                cameraDevice =
+                    camera
+
+
+                camera.connect(networkId)
+
                     .onSuccess {
 
                         cameraConnected = true
@@ -344,7 +312,74 @@ class MainActivity : ComponentActivity() {
 
                         captureStatus =
                             "Cámara lista"
+
+
+                        // =================================================
+                        // PRUEBA 2 DEL LIVE VIEW
+                        //
+                        // Ya comprobamos:
+                        //
+                        // 1. Conexión X3          -> OK
+                        // 2. preview.init()       -> OK
+                        //
+                        // Ahora comprobamos:
+                        //
+                        // 3. registerCameraStreamListener()
+                        //
+                        // TODAVÍA NO EJECUTAMOS startStream()
+                        // =================================================
+
+                        try {
+
+                            captureStatus =
+                                "PRUEBA 2: inicializando preview..."
+
+
+                            // ---------------------------------------------
+                            // Inicializar módulo Preview
+                            // ---------------------------------------------
+
+                            camera.preview.init(
+                                application
+                            )
+
+
+                            captureStatus =
+                                "PRUEBA 2: registrando listener..."
+
+
+                            // ---------------------------------------------
+                            // Registrar listener
+                            // ---------------------------------------------
+
+                            camera.preview
+                                .registerCameraStreamListener(
+                                    cameraStreamListener
+                                )
+
+
+                            captureStatus =
+                                "PRUEBA 2 OK: listener registrado"
+
+
+                            captureStatus =
+                                "PRUEBA 3: iniciando stream..."
+
+                            previewStarted = true
+
+                            camera.preview.startStream()
+
+                            captureStatus =
+                                "PRUEBA 3: startStream() ejecutado"
+
+
+                        } catch (e: Exception) {
+
+                            captureStatus =
+                                "ERROR PRUEBA 2: ${e.message}"
+                        }
                     }
+
                     .onFailure { error ->
 
                         cameraConnected = false
@@ -353,7 +388,8 @@ class MainActivity : ComponentActivity() {
                             "Error de conexión"
 
                         captureStatus =
-                            error.message ?: "No fue posible conectar"
+                            error.message
+                                ?: "No fue posible conectar con la cámara"
                     }
 
 
@@ -365,39 +401,577 @@ class MainActivity : ComponentActivity() {
                     "Error de conexión"
 
                 captureStatus =
-                    e.message ?: "Error desconocido"
+                    e.message
+                        ?: "Error desconocido"
             }
         }
     }
 
 
-    // =========================================================================
-    // TOMAR FOTOGRAFÍA
-    // =========================================================================
+    // ============================================================
+    // DESCONECTAR
+    // ============================================================
+
+    private fun disconnectCamera() {
+
+        lifecycleScope.launch {
+
+            try {
+
+                // ------------------------------------------------
+                // Si está grabando detener primero
+                // ------------------------------------------------
+
+                if (isRecording) {
+
+                    try {
+
+                        cameraDevice
+                            ?.capture
+                            ?.stopCapture()
+
+                    } catch (_: Exception) {
+                    }
+
+
+                    stopRecordingTimer()
+
+                    isRecording = false
+                }
+
+
+                // ------------------------------------------------
+                // Liberar listener de Preview
+                // ------------------------------------------------
+
+                try {
+
+                    cameraDevice
+                        ?.preview
+                        ?.unregisterCameraStreamListener(
+                            cameraStreamListener
+                        )
+
+                } catch (_: Exception) {
+                }
+
+
+                // ------------------------------------------------
+                // Detener Live View si estuviera activo
+                // ------------------------------------------------
+
+                if (previewStarted) {
+
+                    stopLiveView()
+                }
+
+
+                // ------------------------------------------------
+                // Liberar cámara
+                // ------------------------------------------------
+
+                cameraDevice?.release()
+
+                cameraDevice = null
+
+
+                cameraConnected = false
+
+                cameraStatus =
+                    "Cámara desconectada"
+
+                captureStatus =
+                    "Esperando conexión..."
+
+
+            } catch (e: Exception) {
+
+                captureStatus =
+                    "Error al desconectar: ${e.message}"
+            }
+        }
+    }
+
+
+    // ============================================================
+    // CAMERA STREAM LISTENER
+    // ============================================================
+
+    private val cameraStreamListener =
+
+        object : CameraStreamListener {
+
+
+            // ----------------------------------------------------
+            // Stream comenzando a abrir
+            // ----------------------------------------------------
+
+            override fun onOpening() {
+
+                runOnUiThread {
+
+                    captureStatus =
+                        "Abriendo Live View..."
+                }
+            }
+
+
+            // ----------------------------------------------------
+            // Stream abierto
+            // ----------------------------------------------------
+
+            override fun onOpened() {
+
+                val player =
+                    previewPlayerView
+                        ?: return
+
+
+                val camera =
+                    cameraDevice
+                        ?: return
+
+
+                runOnUiThread {
+
+                    captureStatus =
+                        "Preparando imagen 360°..."
+                }
+
+
+                camera.preview
+                    .requestStreamIframe()
+
+
+                player.post {
+
+                    if (!previewStarted) {
+
+                        return@post
+                    }
+
+
+                    player.destroyRender()
+
+
+                    prepareAndPlayPreview(
+                        player
+                    )
+                }
+            }
+
+
+            // ----------------------------------------------------
+            // Stream detenido
+            // ----------------------------------------------------
+
+            override fun onIdle() {
+
+                runOnUiThread {
+
+                    if (
+                        cameraConnected &&
+                        previewStarted
+                    ) {
+
+                        captureStatus =
+                            "Live View detenido"
+                    }
+                }
+            }
+
+
+            // ----------------------------------------------------
+            // Parámetros del stream
+            // ----------------------------------------------------
+
+            override fun onParamsChanged(
+                paramsUpdate: PreviewStreamParamsUpdate
+            ) {
+
+                val player =
+                    previewPlayerView
+                        ?: return
+
+
+                if (
+                    paramsUpdate.previewWidth > 0 &&
+                    paramsUpdate.previewHeight > 0 &&
+                    paramsUpdate.previewFps > 0
+                ) {
+
+                    val resolutionChanged =
+
+                        previewWidth !=
+                                paramsUpdate.previewWidth ||
+
+                                previewHeight !=
+                                paramsUpdate.previewHeight
+
+
+                    val fpsChanged =
+
+                        previewFps !=
+                                paramsUpdate.previewFps
+
+
+                    previewWidth =
+                        paramsUpdate.previewWidth
+
+                    previewHeight =
+                        paramsUpdate.previewHeight
+
+                    previewFps =
+                        paramsUpdate.previewFps
+
+
+                    if (resolutionChanged) {
+
+                        player.setPreviewResolution(
+                            previewWidth,
+                            previewHeight
+                        )
+                    }
+
+
+                    if (fpsChanged) {
+
+                        player.setFps(
+                            previewFps
+                        )
+                    }
+                }
+            }
+        }
+
+
+    // ============================================================
+    // PREPARAR PLAYER
+    // ============================================================
+
+    private fun prepareAndPlayPreview(
+        player: InstaCapturePlayerView
+    ) {
+
+        try {
+
+            player.setListener(
+                playerViewListener
+            )
+
+
+            player.prepare(
+
+                PreviewParams(
+
+                    width =
+                        previewWidth,
+
+                    height =
+                        previewHeight,
+
+                    fps =
+                        previewFps,
+
+                    isGestureEnabled =
+                        true
+                )
+            )
+
+
+            player.play()
+
+
+        } catch (e: Exception) {
+
+            captureStatus =
+                "Error preparando Live View: ${e.message}"
+        }
+    }
+
+
+    // ============================================================
+    // PLAYER VIEW LISTENER
+    // ============================================================
+
+    private val playerViewListener =
+
+        object : PlayerViewListener {
+
+
+            // ----------------------------------------------------
+            // Estado de carga
+            // ----------------------------------------------------
+
+            override fun onLoadingStatusChanged(
+                isLoading: Boolean
+            ) {
+
+                runOnUiThread {
+
+                    if (isLoading) {
+
+                        captureStatus =
+                            "Cargando Live View..."
+                    }
+                }
+            }
+
+
+            // ----------------------------------------------------
+            // Player preparado
+            // ----------------------------------------------------
+
+            override fun onLoadingFinish() {
+
+                val camera =
+                    cameraDevice
+                        ?: return
+
+
+                val player =
+                    previewPlayerView
+                        ?: return
+
+
+                val pipeline =
+                    player.getPipeline()
+
+
+                if (pipeline == null) {
+
+                    runOnUiThread {
+
+                        captureStatus =
+                            "Pipeline de video no disponible"
+                    }
+
+                    return
+                }
+
+
+                // ------------------------------------------------
+                // Unir Media SDK con Camera SDK
+                // ------------------------------------------------
+
+                camera.preview
+                    .setPipeline(
+                        pipeline
+                    )
+
+
+                camera.preview
+                    .requestStreamIframe()
+
+
+                runOnUiThread {
+
+                    captureStatus =
+                        "Esperando imagen 360°..."
+                }
+            }
+
+
+            // ----------------------------------------------------
+            // Error
+            // ----------------------------------------------------
+
+            override fun onFail(
+                exception: InstaException
+            ) {
+
+                runOnUiThread {
+
+                    previewFirstFrame = false
+
+                    captureStatus =
+                        "Error Live View: ${exception.message}"
+                }
+            }
+
+
+            // ----------------------------------------------------
+            // Primer frame
+            // ----------------------------------------------------
+
+            override fun onFirstFrameRendered() {
+
+                runOnUiThread {
+
+                    previewFirstFrame = true
+
+                    captureStatus =
+                        "LIVE VIEW 360°"
+                }
+            }
+
+
+            // ----------------------------------------------------
+            // Liberar pipeline
+            // ----------------------------------------------------
+
+            override fun onReleaseCameraPipeline() {
+
+                cameraDevice
+                    ?.preview
+                    ?.setPipeline(null)
+            }
+        }
+
+
+    // ============================================================
+    // INICIAR LIVE VIEW
+    //
+    // IMPORTANTE:
+    // ESTA FUNCIÓN TODAVÍA NO SE LLAMA AUTOMÁTICAMENTE.
+    //
+    // Primero estamos verificando PRUEBA 2.
+    // ============================================================
+
+    private fun startLiveView() {
+
+        val camera =
+            cameraDevice
+                ?: return
+
+
+        if (previewStarted) {
+
+            return
+        }
+
+
+        try {
+
+            captureStatus =
+                "Iniciando Live View..."
+
+            previewFirstFrame =
+                false
+
+
+            camera.preview.init(
+                application
+            )
+
+
+            camera.preview
+                .registerCameraStreamListener(
+                    cameraStreamListener
+                )
+
+
+            previewStarted =
+                true
+
+
+            camera.preview
+                .startStream()
+
+
+        } catch (e: Exception) {
+
+            previewStarted =
+                false
+
+            previewFirstFrame =
+                false
+
+
+            captureStatus =
+                "Error Live View: ${e.message}"
+        }
+    }
+
+
+    // ============================================================
+    // DETENER LIVE VIEW
+    // ============================================================
+
+    private fun stopLiveView() {
+
+        val camera =
+            cameraDevice
+
+
+        try {
+
+            if (
+                camera != null &&
+                previewStarted
+            ) {
+
+                camera.preview
+                    .unregisterCameraStreamListener(
+                        cameraStreamListener
+                    )
+
+
+                camera.preview
+                    .setPipeline(null)
+
+
+                camera.preview
+                    .stopStream()
+            }
+
+
+        } catch (_: Exception) {
+        }
+
+
+        previewStarted =
+            false
+
+        previewFirstFrame =
+            false
+
+
+        try {
+
+            previewPlayerView
+                ?.setListener(null)
+
+
+            previewPlayerView
+                ?.destroy()
+
+
+        } catch (_: Exception) {
+        }
+
+
+        previewPlayerView =
+            null
+    }
+
+
+    // ============================================================
+    // TOMAR FOTO 360
+    // ============================================================
 
     private fun capturePhoto() {
 
-        val camera = cameraDevice
+        val camera =
+            cameraDevice
 
 
-        // Comprobar conexión
         if (
             camera == null ||
             !cameraConnected
         ) {
 
             captureStatus =
-                "Cámara no conectada"
+                "Conecta primero la Insta360 X3"
 
             return
         }
 
 
-        // No permitimos fotografía mientras grabamos
         if (isRecording) {
 
             captureStatus =
-                "Detén primero la grabación de video"
+                "Detén la grabación antes de tomar una foto"
 
             return
         }
@@ -407,24 +981,18 @@ class MainActivity : ComponentActivity() {
 
             try {
 
+                captureStatus =
+                    "Preparando modo fotografía..."
+
+
                 val capture =
                     camera.capture
 
 
-                captureStatus =
-                    "Configurando modo fotografía..."
-
-
-                // -------------------------------------------------------------
-                // IMPORTANTE
-                //
-                // Forzamos PHOTO_NORMAL.
-                // Esto evita el problema anterior donde startCapture()
-                // iniciaba video porque la X3 permanecía en modo VIDEO.
-                // -------------------------------------------------------------
-
                 val modeResult =
-                    capture.functionMode
+
+                    capture
+                        .functionMode
                         .setValue(
                             FunctionMode.PHOTO_NORMAL
                         )
@@ -433,48 +1001,43 @@ class MainActivity : ComponentActivity() {
                 if (modeResult.isFailure) {
 
                     captureStatus =
-                        "No fue posible activar modo fotografía"
+                        "No fue posible activar modo foto"
 
                     return@launch
                 }
 
 
-                // Pequeña espera para permitir que la cámara
-                // termine el cambio de modo.
                 delay(300)
 
 
                 captureStatus =
-                    "Tomando fotografía..."
+                    "Capturando fotografía 360°..."
 
-
-                // -------------------------------------------------------------
-                // DISPARO REAL
-                // -------------------------------------------------------------
 
                 capture.startCapture()
 
 
                 captureStatus =
-                    "Fotografía capturada"
+                    "Fotografía 360° capturada"
 
 
             } catch (e: Exception) {
 
                 captureStatus =
-                    "Error de fotografía: ${e.message}"
+                    "Error fotografía: ${e.message}"
             }
         }
     }
 
 
-    // =========================================================================
-    // INICIAR GRABACIÓN DE VIDEO
-    // =========================================================================
+    // ============================================================
+    // INICIAR VIDEO
+    // ============================================================
 
     private fun startVideo() {
 
-        val camera = cameraDevice
+        val camera =
+            cameraDevice
 
 
         if (
@@ -483,13 +1046,12 @@ class MainActivity : ComponentActivity() {
         ) {
 
             captureStatus =
-                "Cámara no conectada"
+                "Conecta primero la Insta360 X3"
 
             return
         }
 
 
-        // Evitar dos órdenes de grabación
         if (isRecording) {
 
             return
@@ -500,20 +1062,18 @@ class MainActivity : ComponentActivity() {
 
             try {
 
+                captureStatus =
+                    "Preparando modo video..."
+
+
                 val capture =
                     camera.capture
 
 
-                captureStatus =
-                    "Configurando modo video..."
-
-
-                // -------------------------------------------------------------
-                // FORZAR VIDEO NORMAL
-                // -------------------------------------------------------------
-
                 val modeResult =
-                    capture.functionMode
+
+                    capture
+                        .functionMode
                         .setValue(
                             FunctionMode.VIDEO_NORMAL
                         )
@@ -528,7 +1088,6 @@ class MainActivity : ComponentActivity() {
                 }
 
 
-                // Esperamos que la X3 termine el cambio de modo
                 delay(300)
 
 
@@ -536,62 +1095,49 @@ class MainActivity : ComponentActivity() {
                     "Iniciando grabación..."
 
 
-                // -------------------------------------------------------------
-                // INICIAR GRABACIÓN REAL
-                // -------------------------------------------------------------
-
                 capture.startCapture()
 
 
-                // -------------------------------------------------------------
-                // ACTUALIZAR ESTADO
-                // -------------------------------------------------------------
+                isRecording =
+                    true
 
-                isRecording = true
-
-                recordingSeconds = 0
+                recordingSeconds =
+                    0
 
 
-                // Iniciar cronómetro
+                captureStatus =
+                    "Grabando video 360°"
+
+
                 startRecordingTimer()
 
 
             } catch (e: Exception) {
 
-                isRecording = false
+                isRecording =
+                    false
 
                 captureStatus =
-                    "Error de video: ${e.message}"
+                    "Error video: ${e.message}"
             }
         }
     }
 
 
-    // =========================================================================
-    // DETENER GRABACIÓN
-    // =========================================================================
+    // ============================================================
+    // DETENER VIDEO
+    // ============================================================
 
     private fun stopVideo() {
 
-        val camera = cameraDevice
+        val camera =
+            cameraDevice
 
 
         if (
             camera == null ||
-            !cameraConnected
+            !isRecording
         ) {
-
-            captureStatus =
-                "Cámara no conectada"
-
-            return
-        }
-
-
-        if (!isRecording) {
-
-            captureStatus =
-                "No hay una grabación activa"
 
             return
         }
@@ -605,49 +1151,38 @@ class MainActivity : ComponentActivity() {
                     "Deteniendo grabación..."
 
 
-                // -------------------------------------------------------------
-                // DETENER GRABACIÓN REAL EN LA X3
-                // -------------------------------------------------------------
+                // ------------------------------------------------
+                // SDK 2.1.5
+                // stopCapture() se ejecuta directamente.
+                // ------------------------------------------------
 
-                camera.capture.stopCapture()
-
-
-                // Detener cronómetro
-                recordingJob?.cancel()
-
-                recordingJob = null
+                camera.capture
+                    .stopCapture()
 
 
-                isRecording = false
+                stopRecordingTimer()
 
 
-                val minutes =
-                    recordingSeconds / 60
-
-                val seconds =
-                    recordingSeconds % 60
+                isRecording =
+                    false
 
 
                 captureStatus =
-                    "Video guardado • %02d:%02d"
-                        .format(
-                            minutes,
-                            seconds
-                        )
+                    "Video guardado en Insta360 X3"
 
 
             } catch (e: Exception) {
 
                 captureStatus =
-                    "Error al detener video: ${e.message}"
+                    "Error deteniendo video: ${e.message}"
             }
         }
     }
 
 
-    // =========================================================================
-    // CRONÓMETRO DE GRABACIÓN
-    // =========================================================================
+    // ============================================================
+    // TIMER
+    // ============================================================
 
     private fun startRecordingTimer() {
 
@@ -655,27 +1190,15 @@ class MainActivity : ComponentActivity() {
 
 
         recordingJob =
+
             lifecycleScope.launch {
 
-                while (isRecording) {
-
-                    val minutes =
-                        recordingSeconds / 60
-
-                    val seconds =
-                        recordingSeconds % 60
-
-
-                    captureStatus =
-                        "🔴 GRABANDO  %02d:%02d"
-                            .format(
-                                minutes,
-                                seconds
-                            )
-
+                while (
+                    isActive &&
+                    isRecording
+                ) {
 
                     delay(1000)
-
 
                     recordingSeconds++
                 }
@@ -683,533 +1206,603 @@ class MainActivity : ComponentActivity() {
     }
 
 
-    // =========================================================================
-    // DESCONECTAR CÁMARA
-    // =========================================================================
-
-    private fun disconnectCamera() {
-
-        lifecycleScope.launch {
-
-            try {
-
-                // Si existe una grabación activa,
-                // intentamos detenerla antes de desconectar.
-                if (isRecording) {
-
-                    try {
-
-                        cameraDevice
-                            ?.capture
-                            ?.stopCapture()
-
-                    } catch (_: Exception) {
-
-                    }
-                }
-
-
-                recordingJob?.cancel()
-
-                recordingJob = null
-
-                isRecording = false
-
-
-                // Liberar conexión SDK
-                cameraDevice?.release()
-
-
-            } catch (_: Exception) {
-
-            }
-
-
-            cameraDevice = null
-
-            cameraConnected = false
-
-            recordingSeconds = 0
-
-
-            cameraStatus =
-                "Cámara desconectada"
-
-            captureStatus =
-                "Esperando conexión"
-        }
-    }
-
-
-    // =========================================================================
-    // CIERRE DE LA ACTIVIDAD
-    // =========================================================================
-
-    override fun onDestroy() {
+    private fun stopRecordingTimer() {
 
         recordingJob?.cancel()
 
-        recordingJob = null
-
-        cameraDevice = null
-
-        super.onDestroy()
+        recordingJob =
+            null
     }
-}
 
 
-// =============================================================================
-// INTERFAZ PDI FIELD 360
-// =============================================================================
+    // ============================================================
+    // FORMATO TIEMPO
+    // ============================================================
 
-@Composable
-fun PDIField360Screen(
+    private fun formatRecordingTime(
+        seconds: Int
+    ): String {
 
-    cameraConnected: Boolean,
-
-    cameraStatus: String,
-
-    captureStatus: String,
-
-    isRecording: Boolean,
-
-    recordingSeconds: Int,
-
-    onConnect: () -> Unit,
-
-    onDisconnect: () -> Unit,
-
-    onPhoto: () -> Unit,
-
-    onStartVideo: () -> Unit,
-
-    onStopVideo: () -> Unit
-) {
-
-    Column(
-
-        modifier =
-            Modifier
-                .fillMaxSize()
-                .padding(
-                    start = 20.dp,
-                    end = 20.dp,
-                    top = 45.dp,
-                    bottom = 20.dp
-                ),
-
-        horizontalAlignment =
-            Alignment.CenterHorizontally
-    ) {
+        val hours =
+            seconds / 3600
 
 
-        // =====================================================================
-        // ENCABEZADO
-        // =====================================================================
+        val minutes =
+            (seconds % 3600) / 60
 
-        Text(
-            text = "PDI FIELD 360",
-            fontSize = 28.sp,
-            fontWeight = FontWeight.Bold
+
+        val secs =
+            seconds % 60
+
+
+        return String.format(
+            "%02d:%02d:%02d",
+            hours,
+            minutes,
+            secs
         )
+    }
 
 
-        Text(
-            text = "Captura e Inspección Industrial 360°",
-            fontSize = 14.sp,
-            color = Color.Gray
-        )
+    // ============================================================
+    // INTERFAZ
+    // ============================================================
 
+    @Composable
+    private fun PDIField360Screen() {
 
-        Spacer(
-            modifier =
-                Modifier.height(25.dp)
-        )
-
-
-        // =====================================================================
-        // CÁMARA
-        // =====================================================================
-
-        Text(
-            text = "INSTA360 X3",
-            fontSize = 22.sp,
-            fontWeight = FontWeight.Bold
-        )
-
-
-        Spacer(
-            modifier =
-                Modifier.height(8.dp)
-        )
-
-
-        Text(
-
-            text =
-                "● $cameraStatus",
-
-            color =
-                if (cameraConnected)
-                    Color(0xFF198754)
-                else
-                    Color(0xFFD32F2F),
-
-            fontWeight =
-                FontWeight.Medium
-        )
-
-
-        Spacer(
-            modifier =
-                Modifier.height(20.dp)
-        )
-
-
-        // =====================================================================
-        // PANEL DE ESTADO
-        // =====================================================================
-
-        Card(
+        Column(
 
             modifier =
-                Modifier.fillMaxWidth(),
+                Modifier
+                    .fillMaxSize()
+                    .padding(16.dp),
 
-            shape =
-                RoundedCornerShape(16.dp),
-
-            colors =
-                CardDefaults.cardColors(
-                    containerColor =
-                        Color(0xFF151A1F)
-                )
+            horizontalAlignment =
+                Alignment.CenterHorizontally
         ) {
 
-            Column(
+
+            // ====================================================
+            // TÍTULO
+            // ====================================================
+
+            Text(
+
+                text =
+                    "PDI FIELD 360",
+
+                fontSize =
+                    28.sp
+            )
+
+
+            Text(
+
+                text =
+                    "Captura e Inspección Industrial 360°",
+
+                fontSize =
+                    14.sp,
+
+                color =
+                    Color.Gray
+            )
+
+
+            Spacer(
+                modifier =
+                    Modifier.height(12.dp)
+            )
+
+
+            // ====================================================
+            // CÁMARA
+            // ====================================================
+
+            Text(
+
+                text =
+                    "Insta360 X3",
+
+                fontSize =
+                    18.sp
+            )
+
+
+            Text(
+
+                text =
+                    cameraStatus,
+
+                color =
+
+                    if (cameraConnected)
+
+                        Color(0xFF2E7D32)
+
+                    else
+
+                        Color.Gray
+            )
+
+
+            Spacer(
+                modifier =
+                    Modifier.height(12.dp)
+            )
+
+
+            // ====================================================
+            // LIVE VIEW
+            // ====================================================
+
+            Box(
 
                 modifier =
-                    Modifier.padding(25.dp),
+                    Modifier
+                        .fillMaxWidth()
+                        .aspectRatio(16f / 9f)
+                        .background(
+                            Color.Black,
+                            RoundedCornerShape(12.dp)
+                        ),
 
-                horizontalAlignment =
-                    Alignment.CenterHorizontally
+                contentAlignment =
+                    Alignment.Center
             ) {
 
 
-                Text(
-
-                    text =
-                        if (isRecording)
-                            "GRABACIÓN 360°"
-                        else
-                            "INSTA360 CAMERA",
-
-                    color = Color.White,
-
-                    fontSize = 20.sp,
-
-                    fontWeight =
-                        FontWeight.Bold
-                )
+                if (cameraConnected) {
 
 
-                Spacer(
-                    modifier =
-                        Modifier.height(12.dp)
-                )
+                    // ------------------------------------------------
+                    // Player Insta360
+                    // ------------------------------------------------
+
+                    AndroidView(
+
+                        modifier =
+                            Modifier.fillMaxSize(),
+
+                        factory = { ctx ->
 
 
-                if (isRecording) {
-
-                    val minutes =
-                        recordingSeconds / 60
-
-                    val seconds =
-                        recordingSeconds % 60
+                            InstaCapturePlayerView(
+                                ctx
+                            ).also { player ->
 
 
-                    Text(
+                                previewPlayerView =
+                                    player
 
-                        text =
-                            "● REC  %02d:%02d"
-                                .format(
-                                    minutes,
-                                    seconds
-                                ),
 
-                        color =
-                            Color(0xFFFF5252),
+                                player.setLifecycle(
+                                    this@MainActivity.lifecycle
+                                )
 
-                        fontSize =
-                            25.sp,
 
-                        fontWeight =
-                            FontWeight.Bold
+                                player.setListener(
+                                    playerViewListener
+                                )
+                            }
+                        },
+
+                        update = { player ->
+
+                            previewPlayerView =
+                                player
+                        }
                     )
+
+
+                    // ------------------------------------------------
+                    // Pantalla de estado
+                    // ------------------------------------------------
+
+                    if (!previewFirstFrame) {
+
+                        Box(
+
+                            modifier =
+                                Modifier
+                                    .fillMaxSize()
+                                    .background(
+                                        Color.Black.copy(
+                                            alpha = 0.65f
+                                        )
+                                    ),
+
+                            contentAlignment =
+                                Alignment.Center
+                        ) {
+
+                            Column(
+
+                                horizontalAlignment =
+                                    Alignment.CenterHorizontally
+                            ) {
+
+
+                                CircularProgressIndicator()
+
+
+                                Spacer(
+                                    modifier =
+                                        Modifier.height(12.dp)
+                                )
+
+
+                                Text(
+
+                                    text =
+                                        captureStatus,
+
+                                    color =
+                                        Color.White
+                                )
+                            }
+                        }
+                    }
+
+
+                    // ------------------------------------------------
+                    // LIVE
+                    // ------------------------------------------------
+
+                    if (previewFirstFrame) {
+
+                        Text(
+
+                            text =
+                                "● LIVE 360°",
+
+                            color =
+                                Color.Red,
+
+                            modifier =
+                                Modifier
+                                    .align(
+                                        Alignment.TopStart
+                                    )
+                                    .padding(12.dp)
+                        )
+                    }
+
+
+                    // ------------------------------------------------
+                    // REC
+                    // ------------------------------------------------
+
+                    if (isRecording) {
+
+                        Text(
+
+                            text =
+                                "● REC ${
+                                    formatRecordingTime(
+                                        recordingSeconds
+                                    )
+                                }",
+
+                            color =
+                                Color.Red,
+
+                            modifier =
+                                Modifier
+                                    .align(
+                                        Alignment.TopEnd
+                                    )
+                                    .padding(12.dp)
+                        )
+                    }
+
 
                 } else {
 
-                    Text(
 
-                        text =
-                            captureStatus,
+                    Column(
 
-                        color =
-                            Color.LightGray
-                    )
+                        horizontalAlignment =
+                            Alignment.CenterHorizontally
+                    ) {
+
+
+                        Text(
+
+                            text =
+                                "LIVE VIEW 360°",
+
+                            color =
+                                Color.White,
+
+                            fontSize =
+                                18.sp
+                        )
+
+
+                        Spacer(
+                            modifier =
+                                Modifier.height(8.dp)
+                        )
+
+
+                        Text(
+
+                            text =
+                                "Conecta la Insta360 X3",
+
+                            color =
+                                Color.LightGray
+                        )
+                    }
                 }
             }
-        }
 
 
-        Spacer(
-            modifier =
-                Modifier.height(20.dp)
-        )
-
-
-        // =====================================================================
-        // CONECTAR / DESCONECTAR
-        // =====================================================================
-
-        Button(
-
-            onClick = {
-
-                if (cameraConnected)
-                    onDisconnect()
-                else
-                    onConnect()
-            },
-
-            enabled =
-                !isRecording,
-
-            modifier =
-                Modifier
-                    .fillMaxWidth()
-                    .height(52.dp)
-        ) {
-
-            Text(
-
-                text =
-                    if (cameraConnected)
-                        "DESCONECTAR X3"
-                    else
-                        "CONECTAR X3",
-
-                fontWeight =
-                    FontWeight.Bold
+            Spacer(
+                modifier =
+                    Modifier.height(12.dp)
             )
-        }
 
 
-        Spacer(
-            modifier =
-                Modifier.height(15.dp)
-        )
-
-
-        // =====================================================================
-        // FOTOGRAFÍA
-        // =====================================================================
-
-        Button(
-
-            onClick =
-                onPhoto,
-
-            enabled =
-                cameraConnected &&
-                        !isRecording,
-
-            modifier =
-                Modifier
-                    .fillMaxWidth()
-                    .height(58.dp)
-        ) {
+            // ====================================================
+            // ESTADO
+            // ====================================================
 
             Text(
+
                 text =
-                    "📷  TOMAR FOTO 360°",
+                    captureStatus,
 
                 fontSize =
-                    16.sp,
-
-                fontWeight =
-                    FontWeight.Bold
+                    14.sp
             )
-        }
 
 
-        Spacer(
-            modifier =
-                Modifier.height(12.dp)
-        )
-
-
-        // =====================================================================
-        // VIDEO
-        // =====================================================================
-
-        Button(
-
-            onClick = {
-
-                if (isRecording)
-                    onStopVideo()
-                else
-                    onStartVideo()
-            },
-
-            enabled =
-                cameraConnected,
-
-            modifier =
-                Modifier
-                    .fillMaxWidth()
-                    .height(58.dp)
-        ) {
-
-            Text(
-
-                text =
-                    if (isRecording)
-                        "■  DETENER VIDEO"
-                    else
-                        "●  INICIAR VIDEO",
-
-                fontSize =
-                    16.sp,
-
-                fontWeight =
-                    FontWeight.Bold
+            Spacer(
+                modifier =
+                    Modifier.height(12.dp)
             )
-        }
 
 
-        Spacer(
-            modifier =
-                Modifier.height(22.dp)
-        )
+            // ====================================================
+            // CONECTAR
+            // ====================================================
 
+            Button(
 
-        HorizontalDivider()
+                onClick = {
 
+                    if (cameraConnected) {
 
-        Spacer(
-            modifier =
-                Modifier.height(18.dp)
-        )
+                        disconnectCamera()
 
+                    } else {
 
-        // =====================================================================
-        // INFORMACIÓN DEL SISTEMA
-        // =====================================================================
-
-        Card(
-
-            modifier =
-                Modifier.fillMaxWidth(),
-
-            colors =
-                CardDefaults.cardColors(
-                    containerColor =
-                        Color(0xFFF3F4F6)
-                )
-        ) {
-
-            Column(
+                        connectCamera()
+                    }
+                },
 
                 modifier =
-                    Modifier.padding(16.dp)
+                    Modifier.fillMaxWidth()
             ) {
 
 
                 Text(
-                    text =
-                        "PDI Advanced",
 
-                    fontWeight =
-                        FontWeight.Bold
-                )
+                    if (cameraConnected)
 
+                        "DESCONECTAR INSTA360 X3"
 
-                Text(
-                    text =
-                        "Sistema de captura e inspección industrial 360°",
+                    else
 
-                    color =
-                        Color.DarkGray
-                )
-
-
-                Spacer(
-                    modifier =
-                        Modifier.height(10.dp)
-                )
-
-
-                Row(
-
-                    modifier =
-                        Modifier.fillMaxWidth(),
-
-                    horizontalArrangement =
-                        Arrangement.SpaceBetween
-                ) {
-
-                    Text(
-                        text =
-                            "Cámara",
-
-                        fontSize =
-                            12.sp,
-
-                        color =
-                            Color.Gray
-                    )
-
-
-                    Text(
-                        text =
-                            if (cameraConnected)
-                                "X3 • ONLINE"
-                            else
-                                "OFFLINE",
-
-                        fontSize =
-                            12.sp,
-
-                        fontWeight =
-                            FontWeight.Bold,
-
-                        color =
-                            if (cameraConnected)
-                                Color(0xFF198754)
-                            else
-                                Color.Gray
-                    )
-                }
-
-
-                Spacer(
-                    modifier =
-                        Modifier.height(5.dp)
-                )
-
-
-                Text(
-                    text =
-                        "Insta360 Android SDK 2.1.5",
-
-                    fontSize =
-                        12.sp,
-
-                    color =
-                        Color.Gray
+                        "CONECTAR INSTA360 X3"
                 )
             }
+
+
+            Spacer(
+                modifier =
+                    Modifier.height(10.dp)
+            )
+
+
+            // ====================================================
+            // FOTO
+            // ====================================================
+
+            Button(
+
+                onClick = {
+
+                    capturePhoto()
+                },
+
+                enabled =
+                    cameraConnected &&
+                            !isRecording,
+
+                modifier =
+                    Modifier.fillMaxWidth()
+            ) {
+
+
+                Text(
+                    "📷 TOMAR FOTO 360°"
+                )
+            }
+
+
+            Spacer(
+                modifier =
+                    Modifier.height(10.dp)
+            )
+
+
+            // ====================================================
+            // VIDEO
+            // ====================================================
+
+            Button(
+
+                onClick = {
+
+                    if (isRecording) {
+
+                        stopVideo()
+
+                    } else {
+
+                        startVideo()
+                    }
+                },
+
+                enabled =
+                    cameraConnected,
+
+                modifier =
+                    Modifier.fillMaxWidth()
+            ) {
+
+
+                Text(
+
+                    if (isRecording)
+
+                        "■ DETENER VIDEO"
+
+                    else
+
+                        "● INICIAR VIDEO"
+                )
+            }
+
+
+            // ====================================================
+            // TIEMPO GRABACIÓN
+            // ====================================================
+
+            if (isRecording) {
+
+                Spacer(
+                    modifier =
+                        Modifier.height(8.dp)
+                )
+
+
+                Text(
+
+                    text =
+                        "REC  ${
+                            formatRecordingTime(
+                                recordingSeconds
+                            )
+                        }",
+
+                    color =
+                        Color.Red,
+
+                    fontSize =
+                        18.sp
+                )
+            }
+
+
+            Spacer(
+                modifier =
+                    Modifier.height(16.dp)
+            )
+
+
+            HorizontalDivider()
+
+
+            Spacer(
+                modifier =
+                    Modifier.height(12.dp)
+            )
+
+
+            // ====================================================
+            // INSPECCIÓN
+            // ====================================================
+
+            Text(
+
+                text =
+                    "INSPECCIÓN DE CAMPO",
+
+                fontSize =
+                    16.sp
+            )
+
+
+            Spacer(
+                modifier =
+                    Modifier.height(6.dp)
+            )
+
+
+            Text(
+
+                text =
+                    "Proyecto • Planta • Área • Equipo • TAG",
+
+                color =
+                    Color.Gray,
+
+                fontSize =
+                    13.sp
+            )
         }
+    }
+
+
+    // ============================================================
+    // ON DESTROY
+    // ============================================================
+
+    override fun onDestroy() {
+
+        stopRecordingTimer()
+
+
+        try {
+
+            if (previewStarted) {
+
+                stopLiveView()
+            }
+
+        } catch (_: Exception) {
+        }
+
+
+        try {
+
+            cameraDevice
+                ?.preview
+                ?.unregisterCameraStreamListener(
+                    cameraStreamListener
+                )
+
+        } catch (_: Exception) {
+        }
+
+
+        try {
+
+            cameraDevice?.release()
+
+        } catch (_: Exception) {
+        }
+
+
+        cameraDevice =
+            null
+
+
+        super.onDestroy()
     }
 }
